@@ -1,0 +1,7 @@
+{
+  "name": "libxiaohong_agent_runtime.so",
+  "version": "0.1.0",
+  "description": "AI-assisted task planning and policy-checked orchestration runtime",
+  "types": "./Index.d.ts",
+  "license": "MIT OR Apache-2.0"
+}

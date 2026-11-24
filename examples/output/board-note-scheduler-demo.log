@@ -1,0 +1,156 @@
+PLAN={
+  "taskId": "T-BOARD-001",
+  "nodes": [
+    {
+      "nodeId": "read_board",
+      "toolId": "m1.perceive",
+      "input": {
+        "photoRef": "current-photo"
+      },
+      "dependsOn": [],
+      "requiresApproval": false
+    },
+    {
+      "nodeId": "search_notes",
+      "toolId": "m2.retrieve",
+      "input": {
+        "query": "本节课主题"
+      },
+      "dependsOn": [],
+      "requiresApproval": false
+    },
+    {
+      "nodeId": "draft_note",
+      "toolId": "m5.generate",
+      "input": {
+        "style": "user-profile"
+      },
+      "dependsOn": [
+        "read_board",
+        "search_notes"
+      ],
+      "requiresApproval": false
+    },
+    {
+      "nodeId": "user_review",
+      "toolId": "runtime.awaitUser",
+      "input": {
+        "reviewDraft": true
+      },
+      "dependsOn": [
+        "draft_note"
+      ],
+      "requiresApproval": true
+    },
+    {
+      "nodeId": "save_note",
+      "toolId": "app.notes.create",
+      "input": {
+        "source": "approved-draft"
+      },
+      "dependsOn": [
+        "user_review"
+      ],
+      "requiresApproval": true
+    }
+  ]
+}
+FIRST_WAVE=[
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "read_board",
+    "status": "running",
+    "message": "tool started"
+  },
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "read_board",
+    "status": "completed",
+    "message": "tool completed"
+  },
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "search_notes",
+    "status": "running",
+    "message": "tool started"
+  },
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "search_notes",
+    "status": "completed",
+    "message": "tool completed"
+  }
+]
+SNAPSHOT={
+  "schemaVersion": 1,
+  "taskId": "T-BOARD-001",
+  "statuses": {
+    "read_board": "completed",
+    "search_notes": "completed"
+  },
+  "results": {
+    "read_board": {
+      "output": {
+        "demo": "completed",
+        "nodeId": "read_board"
+      },
+      "evidenceRefs": []
+    },
+    "search_notes": {
+      "output": {
+        "demo": "completed",
+        "nodeId": "search_notes"
+      },
+      "evidenceRefs": []
+    }
+  },
+  "pendingEvents": [
+    {
+      "taskId": "T-BOARD-001",
+      "nodeId": "read_board",
+      "status": "running",
+      "message": "tool started"
+    },
+    {
+      "taskId": "T-BOARD-001",
+      "nodeId": "read_board",
+      "status": "completed",
+      "message": "tool completed"
+    },
+    {
+      "taskId": "T-BOARD-001",
+      "nodeId": "search_notes",
+      "status": "running",
+      "message": "tool started"
+    },
+    {
+      "taskId": "T-BOARD-001",
+      "nodeId": "search_notes",
+      "status": "completed",
+      "message": "tool completed"
+    }
+  ]
+}
+SECOND_WAVE=[
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "draft_note",
+    "status": "running",
+    "message": "tool started"
+  },
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "draft_note",
+    "status": "completed",
+    "message": "tool completed"
+  }
+]
+APPROVAL_WAVE=[
+  {
+    "taskId": "T-BOARD-001",
+    "nodeId": "user_review",
+    "status": "awaitingApproval",
+    "message": "waiting for user approval"
+  }
+]
+APPROVAL_GATE=active; forged input fingerprint rejected
