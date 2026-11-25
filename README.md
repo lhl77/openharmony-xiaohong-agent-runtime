@@ -1,6 +1,16 @@
 # xiaohong-agent-runtime · M3 任务编排运行时
 
-小鸿助手 M3 是跨能力的本地统筹层：接收用户目标，调用 Planner 提出任务图，校验依赖与策略，逐波调度已就绪工具，汇总事件/检查点。**AI 可以建议如何拆任务；只有运行时能批准计划进入执行，且写入节点不能由 AI 自行批准。**
+小鸿助手 M3 是跨能力的本地统筹层：接收用户目标，调用 Planner 提出任务图，校验依赖与策略，逐波调度已就绪工具，汇总事件/检查点。**AI 可以建议如何拆任务、如何选模型后端；只有运行时能批准计划与后端选择进入执行，且写入节点不能由 AI 自行批准。**
+
+## 智慧决策：本地 / 云端模型选择
+
+M3 不是固定用某一个模型，而是在每个需要推理的节点上做一次“智慧决策”：由本地内置 AI（轻量规则 / 端侧小模型）或云端 AI（宿主注入的大模型顾问）提议用本地、近端还是云端执行，再由确定性运行时做硬约束校验：
+
+1. **AI 提议**：`DecisionAdvisor` trait 输出 `DecisionProposal`（backend + 理由 + 置信）。内置 `RuleDecisionAdvisor` 是确定性“本地 AI”，偏好满足能力的本地后端；宿主可替换为云端 LLM 顾问。
+2. **硬约束校验**：候选必须可用、能力覆盖需求、允许承载该数据等级；云端还需 `allowCloud` 为真。私有/受限数据不允许云端，不会因“云端质量更高”被评分抵消。
+3. **确定性回退**：AI 提议被驳回时，运行时按 本地 → 近端 → 云端 找第一个合法候选；全无候选返回 `backend:null`，由宿主等待、降级或询问。
+
+决策结果带 `proposedBy`、`accepted` 和 `reasons`，可解释每一步为何选择或驳回。
 
 ## 调度设计
 
@@ -37,9 +47,10 @@ tests/               编排与失败路径单测
 ```sh
 cargo test --locked
 cargo run --locked --example scheduler_demo
+cargo run --locked --example decision_demo
 ```
 
-演示输出计划、并行只读第一波、生成草稿第二波及人工审批第三波。替身工具只回传 demo 状态，不会真的调用 M1/M2/M5 或写入笔记库；`BoardNotePlanner` 是确定性示例，可替换成 ArkTS/端侧模型实现的 AI Planner。
+演示输出计划、并行只读第一波、生成草稿第二波及人工审批第三波。替身工具只回传 demo 状态，不会真的调用 M1/M2/M5 或写入笔记库；`BoardNotePlanner` 是确定性示例，可替换成 ArkTS/端侧模型实现的 AI Planner。`decision_demo` 展示云端 AI 顾问提议云端、但私有数据被运行时驳回并回退本地。
 
 ## OpenHarmony 集成状态
 
@@ -47,7 +58,7 @@ API 面向 ArkTS + N-API；C ABI 每个入口接收一个 JSON 字符串并返�
 
 ## 范围与限制
 
-- 此 crate 提供任务规划边界、策略校验、波次调度和检查点 schema；不内置 LLM、M1/M2/M5 实际工具或 ArkData 适配器。
+- 此 crate 提供任务规划边界、策略校验、波次调度、后端决策和检查点 schema；不内置 LLM、M1/M2/M5 实际工具或 ArkData 适配器。
 - 示例 `inputFingerprint` 是非密码学 FNV-1a 绑定提示，不是认证或防篡改安全凭据。生产审批应由可信宿主用密码学摘要签发，并安全验证用户身份。
 - `run_ready` 当前为同步演示执行器；超时、取消、并行线程池和真实持久化由宿主 adapter 实现。`timeoutMs` 是工具契约元数据，当前 demo runtime 不强行杀线程。
 - ExternalWrite 默认关闭；同机的 `grantedPermissions` 也只是传入策略快照，不替代系统权限检查。

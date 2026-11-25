@@ -160,3 +160,67 @@ pub struct UserApproval {
     /// Bind approval to the exact serialized tool input shown to the user.
     pub input_sha256: String,
 }
+
+/// Where a generation/inference node executes.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelBackend { Local, Nearby, Cloud }
+
+/// Data sensitivity used by the decision gate. Cloud routing also requires `allowCloud`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DataClass { Public, Private, Restricted }
+
+/// A candidate execution backend with host-supplied eligibility facts.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendOption {
+    pub backend: ModelBackend,
+    #[serde(default = "default_available")]
+    pub available: bool,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub estimated_latency_ms: u64,
+    #[serde(default)]
+    pub estimated_cost_micros: u64,
+    /// Whether this backend may carry this workload's data class.
+    #[serde(default)]
+    pub data_allowed: bool,
+}
+fn default_available() -> bool { true }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionContext {
+    pub task_id: String,
+    pub node_id: String,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
+    pub data_class: DataClass,
+    #[serde(default)]
+    pub allow_cloud: bool,
+    pub candidates: Vec<BackendOption>,
+}
+
+/// Advisor output is a proposal; the runtime validates it against hard constraints.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionProposal {
+    pub backend: ModelBackend,
+    pub rationale: String,
+    #[serde(default)]
+    pub confidence: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionResult {
+    pub task_id: String,
+    pub node_id: String,
+    /// None means no eligible backend; the host should wait, degrade, or ask.
+    pub backend: Option<ModelBackend>,
+    pub proposed_by: String,
+    pub accepted: bool,
+    pub reasons: Vec<String>,
+}

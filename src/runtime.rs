@@ -41,14 +41,87 @@ impl Registry {
     fn tool(&self,id:&str)->RuntimeResult<Arc<dyn Tool>>{self.tools.get(id).cloned().ok_or_else(||RuntimeError::UnknownTool(id.into()))}
 }
 
-pub struct AgentRuntime { planner: Arc<dyn Planner>, registry: Registry, policy: ExecutionPolicy }
+/// Decides whether a node should run on the local, nearby, or cloud model.
+/// Hosts may implement this with a local lightweight model, an on-device rule
+/// engine, or a cloud LLM; the runtime validates the proposal afterwards.
+pub trait DecisionAdvisor: Send + Sync {
+    fn name(&self) -> &str;
+    fn advise(&self, context: &DecisionContext) -> RuntimeResult<DecisionProposal>;
+}
+
+/// Deterministic built-in "local AI": prefers the cheapest capable local backend
+/// and never proposes cloud for data that is not allowed to leave the device.
+pub struct RuleDecisionAdvisor;
+impl DecisionAdvisor for RuleDecisionAdvisor {
+    fn name(&self) -> &str { "local-rule" }
+
+    fn advise(&self, context: &DecisionContext) -> RuntimeResult<DecisionProposal> {
+        for backend in [ModelBackend::Local, ModelBackend::Nearby, ModelBackend::Cloud] {
+            if let Some(candidate) = context.candidates.iter()
+                .find(|candidate| candidate.backend == backend && backend_eligible(candidate, context))
+            {
+                return Ok(DecisionProposal {
+                    backend: candidate.backend,
+                    rationale: format!("{} satisfies capability and data constraints", candidate_name(candidate.backend)),
+                    confidence: 1.0,
+                });
+            }
+        }
+        Ok(DecisionProposal {
+            backend: ModelBackend::Local,
+            rationale: "no eligible backend found".into(),
+            confidence: 0.0,
+        })
+    }
+}
+
+fn candidate_name(backend: ModelBackend) -> &'static str {
+    match backend { ModelBackend::Local => "local", ModelBackend::Nearby => "nearby", ModelBackend::Cloud => "cloud" }
+}
+
+/// Hard constraints: available, capability superset, data allowed, and cloud switch.
+fn backend_eligible(candidate: &BackendOption, context: &DecisionContext) -> bool {
+    if !candidate.available || !candidate.data_allowed {
+        return false;
+    }
+    if candidate.backend == ModelBackend::Cloud && !context.allow_cloud {
+        return false;
+    }
+    context.required_capabilities.iter().all(|required| candidate.capabilities.contains(required))
+}
+
+pub struct AgentRuntime { planner: Arc<dyn Planner>, advisor: Arc<dyn DecisionAdvisor>, registry: Registry, policy: ExecutionPolicy }
 impl AgentRuntime {
-    pub fn new(planner:Arc<dyn Planner>,mut registry:Registry,policy:ExecutionPolicy)->Self{
+    pub fn new(planner:Arc<dyn Planner>,registry:Registry,policy:ExecutionPolicy)->Self{
+        Self::with_advisor(planner,Arc::new(RuleDecisionAdvisor),registry,policy)
+    }
+    pub fn with_advisor(planner:Arc<dyn Planner>,advisor:Arc<dyn DecisionAdvisor>,mut registry:Registry,policy:ExecutionPolicy)->Self{
         if !registry.tools.contains_key("runtime.awaitUser") { registry.tools.insert("runtime.awaitUser".into(),Arc::new(AwaitUserTool)); }
-        Self{planner,registry,policy}
+        Self{planner,advisor,registry,policy}
     }
     pub fn registry(&self)->&Registry{&self.registry}
     pub fn policy(&self)->&ExecutionPolicy{&self.policy}
+    pub fn advisor_name(&self)->&str{self.advisor.name()}
+    /// AI advises a backend; the runtime validates the proposal against hard constraints.
+    pub fn decide_backend(&self,context:DecisionContext)->RuntimeResult<DecisionResult>{
+        if context.task_id.trim().is_empty()||context.node_id.trim().is_empty(){return Err(RuntimeError::InvalidPlan("taskId and nodeId must be non-empty".into()));}
+        if context.candidates.is_empty(){return Err(RuntimeError::InvalidPlan("candidates must not be empty".into()));}
+        let proposal=self.advisor.advise(&context)?;
+        let mut reasons=vec![format!("advisor {} proposed {:?}",self.advisor.name(),proposal.backend)];
+        let candidate=context.candidates.iter().find(|candidate|candidate.backend==proposal.backend);
+        let accepted=candidate.is_some_and(|candidate|backend_eligible(candidate,&context));
+        if accepted{reasons.push("proposal passed hard-constraint validation".into());return Ok(DecisionResult{task_id:context.task_id,node_id:context.node_id,backend:Some(proposal.backend),proposed_by:self.advisor.name().into(),accepted:true,reasons});}
+        if let Some(candidate)=candidate{reasons.push(format!("proposal rejected: available={}, dataAllowed={}, cloudAllowed={}",candidate.available,candidate.data_allowed,context.allow_cloud));}
+        // Deterministic fallback keeps execution going without violating constraints.
+        for backend in [ModelBackend::Local,ModelBackend::Nearby,ModelBackend::Cloud]{
+            if let Some(candidate)=context.candidates.iter().find(|candidate|candidate.backend==backend&&backend_eligible(candidate,&context)){
+                reasons.push(format!("fallback to {:?}",candidate.backend));
+                return Ok(DecisionResult{task_id:context.task_id,node_id:context.node_id,backend:Some(candidate.backend),proposed_by:self.advisor.name().into(),accepted:false,reasons});
+            }
+        }
+        reasons.push("no eligible backend; host should wait, degrade, or ask".into());
+        Ok(DecisionResult{task_id:context.task_id,node_id:context.node_id,backend:None,proposed_by:self.advisor.name().into(),accepted:false,reasons})
+    }
     /// The planner proposes; the deterministic runtime validates and schedules.
     pub fn plan(&self,goal:&AgentGoal)->RuntimeResult<TaskPlan>{let plan=self.planner.propose(goal,&self.registry.descriptors())?;validate_plan(&plan,&self.registry,&self.policy)?;Ok(plan)}
     pub fn start(&self,goal:AgentGoal,plan:TaskPlan)->RuntimeResult<RunState>{validate_plan(&plan,&self.registry,&self.policy)?;Ok(RunState{goal,plan,policy:self.policy.clone(),statuses:BTreeMap::new(),results:BTreeMap::new(),events:Vec::new()})}
